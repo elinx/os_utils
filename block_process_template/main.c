@@ -2,6 +2,7 @@
 #include <linux/module.h>
 #include <asm/uaccess.h>
 #include <linux/proc_fs.h>
+#include <linux/sched.h>
 
 #define LOG_FUNC_B() printk(KERN_INFO "%s +\n", __func__)
 #define LOG_FUNC_E() printk(KERN_INFO "%s +\n", __func__)
@@ -45,20 +46,36 @@ ssize_t xxx_proc_write(struct file *filp, const char __user *buf, size_t count,
 	return write_cnt;
 }
 
+static int file_opened = 0;
+DECLARE_WAIT_QUEUE_HEAD(xxx_wait_q);
+
 int xxx_proc_open(struct inode *inode, struct file *filp)
 {
+	if (file_opened && (filp->f_flags & O_NONBLOCK))
+		return -EAGAIN;
+
 	try_module_get(THIS_MODULE);
+
+	while (file_opened) {
+		wait_event_interruptible(xxx_wait_q, !file_opened); // wait until file is not opened
+	}
+	file_opened = 1; // file is opened, no other process can access it
+
 	return 0;
 }
 
 int xxx_proc_close(struct inode *inode, struct file *filp)
 {
+	file_opened = 0; // file is not opened, other process can access it
+	wake_up(&xxx_wait_q);
 	module_put(THIS_MODULE);
 	return 0;
 }
 
 static struct file_operations xxx_proc_fops = {
 	.owner = THIS_MODULE,
+	.open = xxx_proc_open,
+	.release = xxx_proc_close,
 	.read = xxx_proc_read,
 	.write = xxx_proc_write,
 };
